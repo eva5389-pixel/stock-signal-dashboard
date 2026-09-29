@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import yfinance as yf
 
 
 APP_DIR = Path(__file__).parent
@@ -19,6 +20,45 @@ st.set_page_config(
 @st.cache_data
 def load_sample_data() -> pd.DataFrame:
     return pd.read_csv(DATA_FILE)
+
+
+@st.cache_data(ttl="15m", show_spinner="正在取得股價資料…")
+def load_market_snapshot(symbol: str) -> dict[str, object]:
+    """從 Yahoo Finance 取得技術面快照；法人資料另由官方來源補充。"""
+    ticker = yf.Ticker(symbol)
+    history = ticker.history(period="6mo", auto_adjust=True)
+    if history.empty or len(history) < 61:
+        raise ValueError("找不到足夠的歷史行情，請確認代號，例如 2330.TW 或 6488.TWO。")
+
+    close = history["Close"].dropna()
+    volume = history["Volume"].dropna()
+    ma20 = close.rolling(20).mean()
+    ma60 = close.rolling(60).mean()
+    delta = close.diff()
+    gains = delta.clip(lower=0).rolling(14).mean()
+    losses = (-delta.clip(upper=0)).rolling(14).mean()
+    rs = gains / losses.replace(0, pd.NA)
+    rsi = 100 - (100 / (1 + rs))
+
+    latest = float(close.iloc[-1])
+    previous_20_high = float(close.iloc[-21:-1].max())
+    volume_ratio = float(volume.iloc[-1] / volume.iloc[-20:].mean())
+    info = ticker.fast_info
+    return {
+        "symbol": symbol,
+        "name": ticker.info.get("longName") or ticker.info.get("shortName") or symbol,
+        "price": latest,
+        "change_pct": (latest / float(close.iloc[-2]) - 1) * 100,
+        "ma20": float(ma20.iloc[-1]),
+        "ma60": float(ma60.iloc[-1]),
+        "above_ma": bool(latest > ma20.iloc[-1] and latest > ma60.iloc[-1]),
+        "ma20_up": bool(ma20.iloc[-1] > ma20.iloc[-6]),
+        "breakout": bool(latest > previous_20_high),
+        "rsi": float(rsi.iloc[-1]),
+        "volume_ratio": volume_ratio,
+        "currency": info.get("currency", "TWD"),
+        "date": history.index[-1].strftime("%Y-%m-%d"),
+    }
 
 
 def score_row(row: pd.Series) -> int:
@@ -87,6 +127,16 @@ st.caption("法人籌碼 × 價格趨勢 × 基本面 × 成交量 × 市場環�
 
 with st.sidebar:
     st.header("資料與風險設定")
+    with st.form("live_lookup_form"):
+        live_symbol = st.text_input(
+            "即時股票代號",
+            placeholder="例如 2330.TW、6488.TWO",
+        ).strip().upper()
+        lookup_submitted = st.form_submit_button(
+            ":material/search: 查詢技術資料",
+            type="primary",
+            width="stretch",
+        )
     uploaded = st.file_uploader("上傳股票資料 CSV", type="csv")
     account_risk_pct = st.slider(
         "單筆最大風險（占總資金）",
@@ -97,6 +147,45 @@ with st.sidebar:
         format="%.2f%%",
     )
     st.info("未上傳檔案時使用示範資料。CSV 欄位格式可參考專案內的 sample_stocks.csv。")
+
+if lookup_submitted:
+    st.session_state["lookup_symbol"] = live_symbol
+
+lookup_symbol = st.session_state.get("lookup_symbol", "")
+if lookup_symbol:
+    try:
+        snapshot = load_market_snapshot(lookup_symbol)
+        with st.container(border=True):
+            st.subheader(f"{snapshot['name']}（{snapshot['symbol']}）")
+            st.caption(f"Yahoo Finance 行情日期：{snapshot['date']}｜法人資料尚未串接，因此不產生完整買賣評分。")
+            with st.container(horizontal=True):
+                st.metric(
+                    "收盤價",
+                    f"{snapshot['price']:.2f} {snapshot['currency']}",
+                    f"{snapshot['change_pct']:+.2f}%",
+                    border=True,
+                )
+                st.metric("RSI（14日）", f"{snapshot['rsi']:.1f}", border=True)
+                st.metric("成交量／20日均量", f"{snapshot['volume_ratio']:.2f}×", border=True)
+                st.metric(
+                    "20／60日均線",
+                    "站上" if snapshot["above_ma"] else "尚未站上",
+                    border=True,
+                )
+            checks = pd.DataFrame(
+                {
+                    "技術條件": ["站上20與60日均線", "20日均線向上", "突破前20日高點", "RSI介於50–70"],
+                    "結果": [
+                        snapshot["above_ma"],
+                        snapshot["ma20_up"],
+                        snapshot["breakout"],
+                        50 <= snapshot["rsi"] <= 70,
+                    ],
+                }
+            )
+            st.dataframe(checks, hide_index=True)
+    except Exception as exc:
+        st.warning(f"無法查詢 {lookup_symbol}：{exc}")
 
 try:
     raw = pd.read_csv(uploaded) if uploaded is not None else load_sample_data()
@@ -110,7 +199,7 @@ signals = ["全部", "買進候選", "偏多／等回檔", "觀望", "減碼", "
 
 filter_row = st.container(horizontal=True)
 with filter_row:
-    keyword = st.text_input("搜尋股票", placeholder="輸入代號或名稱")
+    keyword = st.text_input("篩選目前清單", placeholder="輸入清單內的代號或名稱")
     market = st.selectbox("市場", markets)
     signal = st.selectbox("訊號", signals)
 
@@ -125,6 +214,9 @@ if market != "全部":
     filtered = filtered[filtered["市場"] == market]
 if signal != "全部":
     filtered = filtered[filtered["訊號"] == signal]
+
+if filtered.empty:
+    st.info("目前載入的清單沒有符合項目。若要查詢其他股票，請使用左側的「即時股票代號」。")
 
 with st.container(horizontal=True):
     st.metric("買進候選", int((scored["訊號"] == "買進候選").sum()), border=True)
