@@ -42,6 +42,7 @@ def load_market_snapshot(symbol: str) -> dict[str, object]:
 
     latest = float(close.iloc[-1])
     previous_20_high = float(close.iloc[-21:-1].max())
+    recent_20_low = float(close.iloc[-20:].min())
     volume_ratio = float(volume.iloc[-1] / volume.iloc[-20:].mean())
     info = ticker.fast_info
     return {
@@ -54,11 +55,47 @@ def load_market_snapshot(symbol: str) -> dict[str, object]:
         "above_ma": bool(latest > ma20.iloc[-1] and latest > ma60.iloc[-1]),
         "ma20_up": bool(ma20.iloc[-1] > ma20.iloc[-6]),
         "breakout": bool(latest > previous_20_high),
+        "previous_20_high": previous_20_high,
+        "recent_20_low": recent_20_low,
+        "stop_reference": max(recent_20_low, latest * 0.92),
         "rsi": float(rsi.iloc[-1]),
         "volume_ratio": volume_ratio,
         "currency": info.get("currency", "TWD"),
         "date": history.index[-1].strftime("%Y-%m-%d"),
     }
+
+
+def technical_recommendation(snapshot: dict[str, object]) -> dict[str, object]:
+    """只依可驗證的價格與成交量產生暫定操作建議。"""
+    points = 0
+    points += 20 if snapshot["above_ma"] else 0
+    points += 10 if snapshot["ma20_up"] else 0
+    points += 10 if snapshot["breakout"] else 0
+    points += 10 if 50 <= snapshot["rsi"] <= 70 else 0
+    points += 5 if snapshot["volume_ratio"] >= 1.3 else 0
+
+    cautions: list[str] = []
+    if snapshot["rsi"] > 75:
+        cautions.append("RSI 過熱，不宜追價")
+    if snapshot["volume_ratio"] >= 2 and not snapshot["breakout"]:
+        cautions.append("爆量但未突破，留意上方賣壓")
+
+    if points >= 45 and not cautions:
+        label = "技術偏多／分批觀察"
+        action = "突破確認後先配置預定部位40%；回測支撐不破再加30%，再創高且量價續強才補足剩餘30%。"
+    elif points >= 30:
+        label = "偏多但等待確認"
+        action = "暫不追價；等待回測20日均線止穩，或帶量突破前20日高點後再分批觀察。"
+    elif snapshot["above_ma"]:
+        label = "中性觀望"
+        action = "價格仍在均線之上，但動能不足；等待RSI與成交量改善，不先建立新部位。"
+    else:
+        label = "技術轉弱／暫時避開"
+        action = "尚未站回20與60日均線，不建立新部位；既有部位可依前低或停損參考價管理風險。"
+
+    if cautions:
+        action = f"{action} 注意：{'；'.join(cautions)}。"
+    return {"points": points, "label": label, "action": action}
 
 
 def score_row(row: pd.Series) -> int:
@@ -155,6 +192,7 @@ lookup_symbol = st.session_state.get("lookup_symbol", "")
 if lookup_symbol:
     try:
         snapshot = load_market_snapshot(lookup_symbol)
+        recommendation = technical_recommendation(snapshot)
         with st.container(border=True):
             st.subheader(f"{snapshot['name']}（{snapshot['symbol']}）")
             st.caption(f"Yahoo Finance 行情日期：{snapshot['date']}｜法人資料尚未串接，因此不產生完整買賣評分。")
@@ -184,6 +222,23 @@ if lookup_symbol:
                 }
             )
             st.dataframe(checks, hide_index=True)
+            st.subheader(":material/strategy: 暫定建議操作")
+            st.markdown(f"**{recommendation['label']}**（技術條件 {recommendation['points']}／55 分）")
+            st.write(recommendation["action"])
+            with st.container(horizontal=True):
+                st.metric(
+                    "前20日高點",
+                    f"{snapshot['previous_20_high']:.2f} {snapshot['currency']}",
+                    border=True,
+                )
+                st.metric(
+                    "停損參考價",
+                    f"{snapshot['stop_reference']:.2f} {snapshot['currency']}",
+                    f"{(snapshot['stop_reference'] / snapshot['price'] - 1) * 100:.1f}%",
+                    delta_color="inverse",
+                    border=True,
+                )
+            st.caption("此建議只使用價格、均線、RSI與成交量。法人、財報及產業資料未補齊前，不會標示為完整買進或賣出訊號。")
     except Exception as exc:
         st.warning(f"無法查詢 {lookup_symbol}：{exc}")
 
