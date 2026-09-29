@@ -1,0 +1,8 @@
+股票代號,股票名稱,市場,法人5日買超占成交量%,法人連買日數,外資投信同買,站上20日與60日均線,20日均線向上,突破20日高點,RSI,營收年增%,獲利年增%,ROE與自由現金流健康,成交量/20日均量,爆量長上影,大盤多頭,產業多頭,停損距離%
+2330,台積電,上市,4.8,5,True,True,True,True,63,18.2,22.5,True,1.42,False,True,True,7.0
+2345,智邦,上市,3.6,4,True,True,True,False,72,35.0,28.0,True,1.18,False,True,True,7.5
+3081,聯亞,上櫃,2.7,3,True,True,True,False,66,21.0,14.0,True,1.35,False,True,True,8.0
+2308,台達電,上市,1.2,2,False,True,True,False,58,12.0,10.0,True,0.92,False,True,True,7.0
+8299,群聯,上櫃,-0.8,0,False,False,False,False,47,8.0,-4.0,True,1.06,False,True,False,8.0
+2408,南亞科,上市,-3.4,0,False,False,False,False,39,-5.0,-18.0,False,1.51,True,True,False,8.0
+4979,華星光,上市,-5.9,0,False,False,False,False,32,3.0,-9.0,False,1.76,True,True,False,8.0
